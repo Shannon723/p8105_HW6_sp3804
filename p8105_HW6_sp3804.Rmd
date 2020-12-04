@@ -1,0 +1,211 @@
+---
+title: "HW6"
+author: "Seonyoung Park (sp3804)"
+date: "12/4/2020"
+output: github_document
+---
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(labelled)
+library(modelr)
+```
+## Problem 1 
+
+```{r}
+homicide_df = read_csv("./homicide-data.csv", na=c("", "NA", "Unknown"))%>%
+  mutate(
+    city_state=str_c(city,state, sep="_"),
+    victim_age = as.numeric(victim_age),
+    resolution=case_when(
+      disposition=="Closed without arrest"~0,
+      disposition=="Open/No arrest"~0,
+      disposition=="Closed by arrest"~1,
+    )
+  ) %>%
+  filter(
+    city_state !="Tulsa_AL") %>%
+  select(city_state, resolution, victim_age, victim_race, victim_sex)
+
+```
+Starts with one city
+```{r}
+
+baltimore_df = homicide_df %>%
+  filter(city_state=="Baltimore_MD")
+
+glm(resolution ~ victim_age + victim_race + victim_sex, data=baltimore_df,
+    family = binomial()) %>%
+  broom::tidy() %>%
+  mutate(
+    OR = exp(estimate),
+    CI_lower=exp(estimate-1.96*std.error),
+    CI_upper=exp(estimate+1.96*std.error)
+  ) %>%
+  select(term,OR,starts_with("CI")) %>%
+  knitr::kable(digits=3)
+```
+Try this across cities
+
+```{r}
+a= na.omit(homicide_df) %>%
+  nest(data= -city_state)
+
+models_results_df = a %>%
+  mutate(
+    models = 
+      map(.x=data, ~glm(resolution ~victim_age + victim_race + victim_sex, data = .x, family = binomial(logit))),
+    results = map(models, broom::tidy)
+  ) %>%
+    select(city_state, results) %>%
+    unnest(results) %>%
+    mutate(
+      OR = exp(estimate),
+      CI_lower = exp(estimate-1.96*std.error),
+      CI_upper = exp(estimate+1.96*std.error)
+    ) %>%
+    select(city_state, term, OR, starts_with("CI"))
+
+
+```
+
+Finally, I make a plot showing the estimates (and CI) of the proportion of unsolved homicides in each city
+```{r}
+models_results_df %>%
+  filter(term == "victim_sexMale") %>%
+  mutate(city_state = fct_reorder(city_state, OR)) %>%
+  ggplot(aes(x=city_state, y=OR)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=CI_lower, ymax=CI_upper)) +
+  theme(axis.text.x=element_text(angle=90, hjust=1))
+
+```
+
+
+## Problem 2
+
+### Approach
+* Find some residuals 
+* residual plot; geom_density()
+```{r}
+birthweight = read.csv("birthweight.csv")
+glimpse(birthweight)
+birthweight = birthweight %>%
+  set_value_labels(
+    babysex=c(male=1, female=2),
+    mrace=c(White=1, Black=2, Asian=3, Puerto_Rican=4, Other=8),
+    frace=c(White=1, Black=2, Asian=3, Puerto_Rican=4, Other=8),
+    malform=c(absent=0, present=1)
+  ) %>%
+  mutate_if(is.labelled, to_factor)
+
+birthweight = birthweight %>%
+  mutate(birth_order = parity+1)
+birthweight = birthweight %>%
+  mutate(birth_order=as.integer(birth_order))
+```
+
+### Propose a regression model for birthweight
+
+Here we hypothesized baby's head circumstance at birth (centimeters) is significantly associated with baby's birth weight, and maternal demographic features might work as effect modificators. Through forward step approach, the best prospective EMM covariate is chosen. 
+
+After comparing the impact of covariate to change the bhead estimate and R-square of the model, maternal race is chosen and included into the model as interaction terms. 
+```{r}
+fit1 = lm(bwt ~bhead, data=birthweight)
+summary(fit1)  
+
+fit2 = lm(bwt ~bhead*mrace, data=birthweight)
+summary(fit2)  
+
+fit3 = lm(bwt ~bhead*momage, data=birthweight)
+summary(fit3)  
+
+fit4 = lm(bwt ~bhead*fincome, data=birthweight)
+summary(fit4)  
+
+fit_final = lm(bwt ~bhead*mrace, data=birthweight)
+
+broom::tidy(fit_final) %>%
+  select(-std.error, -statistic) %>%
+  knitr::kable()
+  
+```
+
+
+### Diagnostics
+
+```{r, include=FALSE}
+modelr::add_residuals(birthweight,fit_final)
+modelr::add_predictions(birthweight,fit_final)
+
+modelr::add_residuals(birthweight,fit_final) %>%
+  ggplot(aes(x=mrace, y=resid)) +
+  geom_violin()
+```
+
+Plot the residuals 
+
+* Even though the residuals are not skewed for all maternal race category, in general, the residuals are pretty high in this model. 
+* As the birthweight increases, residuals get increase. 
+```{r}
+modelr::add_residuals(birthweight,fit_final) %>%
+  ggplot(aes(x=bwt, y=resid, color=mrace)) +
+  geom_point() +labs(title = "<Residuals against fitted value>") + 
+  theme_classic()
+
+```
+
+
+### Compare your model to two others:
+
+* compare1: One using length at birth and gestational age as predictors (main effects only)
+* compare2: One using head circumference, length, sex, and all interactions (including the three-way interaction) between these
+
+```{r}
+compare1 = lm(bwt ~blength+gaweeks, data=birthweight)
+summary(compare1)  
+
+compare2 = lm(bwt ~bhead*blength*babysex, data=birthweight)
+summary(compare2)  
+```
+
+Cross validation using 'modelr'
+
+* fit_final= lm(bwt ~bhead*mrace, data=birthweight)
+* compare1= lm(bwt ~blength+gaweeks, data=birthweight)
+* compare2= lm(bwt ~bhead*blength*babysex, data=birthweight)
+
+```{r}
+cv_df =
+  crossv_mc(birthweight, 100) %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+
+cv_df = 
+  cv_df %>% 
+  mutate(
+    fit  = map(train, ~lm(bwt ~bhead*mrace, data = .x)),
+    compare1 = map(train, ~lm(bwt ~blength+gaweeks, data = .x)),
+    compare2 = map(train, ~lm(bwt ~bhead*blength*babysex, data = .x))) %>% 
+  mutate(
+    rmse_fit = map2_dbl(fit, test, ~rmse(model = .x, data = .y)),
+    rmse_compare1    = map2_dbl(compare1, test, ~rmse(model = .x, data = .y)),
+    rmse_compare2 = map2_dbl(compare2, test, ~rmse(model = .x, data = .y)))
+```
+
+Finally, I’ll plot the prediction error distribution for each candidate model.
+By comparing the prediction error, what seems to be winner is the compare2 model using head circumference, length, sex, and all interactions (including the three-way interaction) between these. 
+```{r}
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+
+```
