@@ -135,23 +135,26 @@ broom::tidy(fit_final) %>%
 
 ### Diagnostics
 
-```{r, include=FALSE}
-modelr::add_residuals(birthweight,fit_final)
-modelr::add_predictions(birthweight,fit_final)
+When we plot the residual along each maternal race category, we may notice the residual is highly skewed for "Black" race category. 
 
-modelr::add_residuals(birthweight,fit_final) %>%
+```{r, include=FALSE}
+birthweight= birthweight %>%
+  modelr::add_residuals(fit_final) %>%
+  modelr::add_predictions(fit_final)
+
+birthweight %>%
   ggplot(aes(x=mrace, y=resid)) +
   geom_violin()
 ```
 
-Plot the residuals 
+Plot the residuals along fitted value
 
 * Even though the residuals are not skewed for all maternal race category, in general, the residuals are pretty high in this model. 
 * As the birthweight increases, residuals get increase. 
 ```{r}
-modelr::add_residuals(birthweight,fit_final) %>%
+birthweight %>%
   ggplot(aes(x=bwt, y=resid, color=mrace)) +
-  geom_point() +labs(title = "<Residuals against fitted value>") + 
+  geom_point() +labs(title = "<Residuals against fitted value>") + facet_wrap("mrace")+
   theme_classic()
 
 ```
@@ -178,7 +181,7 @@ Cross validation using 'modelr'
 
 ```{r}
 cv_df =
-  crossv_mc(birthweight, 100) %>% 
+  crossv_mc(birthweight, 1000) %>% 
   mutate(
     train = map(train, as_tibble),
     test = map(test, as_tibble))
@@ -206,6 +209,116 @@ cv_df %>%
     values_to = "rmse",
     names_prefix = "rmse_") %>% 
   mutate(model = fct_inorder(model)) %>% 
-  ggplot(aes(x = model, y = rmse)) + geom_violin()
+  ggplot(aes(x = model, y = rmse)) + geom_violin() +theme_classic()
 
 ```
+
+## Problem 3
+
+### Data loading
+```{r}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
+
+```
+
+### linear model 
+```{r}
+
+temp_model = lm(tmax ~tmin, data=weather_df)
+
+broom::glance(temp_model)
+
+beta = broom::tidy(temp_model) %>%
+  select(term,estimate) %>%
+  set_value_labels(term=c(Beta0="(Intercept)", Beta1="tmin"))%>%
+  mutate_if(is.labelled,to_factor) %>%
+  pivot_wider(
+    names_from = term,
+    values_from = estimate
+  ) 
+
+```
+
+### Bootstrap
+
+```{r}
+boot_straps= weather_df %>% 
+  modelr::bootstrap(n = 5000) %>% 
+  mutate(
+    temp_model = map(strap, ~lm(tmax ~tmin, data=.x)),
+    results = map(temp_model, broom::tidy),
+    summary= map(temp_model, broom::glance)
+    ) 
+```
+
+### Plot the distribution of your estimates, and describe these in words.
+
+```{r}
+boot_straps %>% 
+  select(-strap, -.id, -temp_model) %>% 
+  unnest(summary) %>%
+  ggplot(aes(x = r.squared)) + geom_density() +theme_classic()+
+  labs(title="<Distribution of R^2 estimation>")
+
+boot_straps %>% 
+  select(-strap, -.id, -temp_model) %>% 
+  unnest(results) %>% 
+  select(term,estimate) %>%
+  set_value_labels(term=c(Beta0="(Intercept)", Beta1="tmin"))%>%
+  mutate_if(is.labelled,to_factor) %>%
+  ggplot(aes(x = estimate, color=term)) + geom_density() +theme_classic()+facet_wrap("term")+
+  labs(title="<Distribution of coefficients estimation>")
+
+
+```
+
+
+### 95% CI for R^2
+```{r}
+boot_straps %>% 
+  select(-strap, -.id, -temp_model) %>% 
+  unnest(summary) %>% 
+  summarize(
+    R2_CI_low = quantile(r.squared, 0.025),
+    R2_CI_upper = quantile(r.squared, 0.975)
+  )
+```
+
+
+### 95% CI for log(B0*B1)
+```{r}
+boot_straps %>% 
+  select(-strap, -.id, -temp_model) %>% 
+  unnest(results) %>% 
+  select(term,estimate) %>%
+  set_value_labels(term=c(Beta0="(Intercept)", Beta1="tmin"))%>%
+  mutate_if(is.labelled,to_factor) %>%
+  pivot_wider(
+    names_from = term,
+    values_from = estimate
+  ) %>%
+  unnest() %>%
+  mutate(
+    log_B0_B1 = Beta0*Beta1
+  ) %>%
+  summarize(
+    CI_low = quantile(log_B0_B1, 0.025),
+    CI_upper = quantile(log_B0_B1, 0.975),
+
+  )
+
+
+```
+
+
+
