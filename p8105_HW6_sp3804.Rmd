@@ -149,12 +149,17 @@ birthweight %>%
 
 Plot the residuals along fitted value
 
-* Even though the residuals are not skewed for all maternal race category, in general, the residuals are pretty high in this model. 
-* As the birthweight increases, residuals get increase. 
+* The residual distribution along fitted value is centered around zero. 
+* Among maternal race category, the residual of Black category is a little left-skewed. 
 ```{r}
 birthweight %>%
-  ggplot(aes(x=bwt, y=resid, color=mrace)) +
+  ggplot(aes(x=pred, y=resid, color=mrace)) +
   geom_point() +labs(title = "<Residuals against fitted value>") + facet_wrap("mrace")+
+  theme_classic()
+
+birthweight %>%
+  ggplot(aes(x=pred, y=resid, color=mrace)) +
+  geom_point() +labs(title = "<Residuals against fitted value>") +
   theme_classic()
 
 ```
@@ -263,6 +268,9 @@ boot_straps= weather_df %>%
 
 ### Plot the distribution of your estimates, and describe these in words.
 
+* R^2 estimate is almost normally distributed, even though having slight tail extending to low values and a bit of a "shoulder"
+* log(B0*B1) estimate is almost normally distributed. 
+
 ```{r}
 boot_straps %>% 
   select(-strap, -.id, -temp_model) %>% 
@@ -276,8 +284,15 @@ boot_straps %>%
   select(term,estimate) %>%
   set_value_labels(term=c(Beta0="(Intercept)", Beta1="tmin"))%>%
   mutate_if(is.labelled,to_factor) %>%
-  ggplot(aes(x = estimate, color=term)) + geom_density() +theme_classic()+facet_wrap("term")+
-  labs(title="<Distribution of coefficients estimation>")
+  pivot_wider(
+    names_from = term,
+    values_from = estimate
+  )%>%
+  unnest() %>%
+  mutate(
+    log_B0_B1 = Beta0*Beta1
+  )%>%
+  ggplot(aes(x = log_B0_B1)) + geom_density() +theme_classic()+ labs(title="<Distribution of log(B0*B1) estimation>")
 
 
 ```
